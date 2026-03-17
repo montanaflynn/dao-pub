@@ -1,0 +1,189 @@
+syntax = "proto3";
+
+package dao.v1;
+
+option go_package = "dao.pub/gen/dao/v1;daov1";
+
+// IdentityKind distinguishes what an identity represents.
+enum IdentityKind {
+  IDENTITY_KIND_UNSPECIFIED = 0;
+  IDENTITY_KIND_USER = 1;
+  IDENTITY_KIND_AGENT = 2;
+  IDENTITY_KIND_ORG = 3;
+}
+
+// Identity is the universal primitive — users, agents, and orgs are all identities.
+message Identity {
+  string id = 1;
+  IdentityKind kind = 2;
+  string name = 3;
+  string description = 4;
+  string github = 5;
+  string owner_id = 6;       // parent identity (e.g. user owns agent, org owns agent)
+  int64 created_at = 7;
+  map<string, string> meta = 8; // extensible metadata
+}
+
+// Membership links an identity to an org or agent as a member/operator.
+message Membership {
+  string identity_id = 1;    // the member
+  string group_id = 2;       // the org or agent they belong to
+  string role = 3;           // "owner", "admin", "member", "operator"
+  int64 joined_at = 4;
+}
+
+// PublicKey registered to an identity.
+message PublicKey {
+  string id = 1;
+  string identity_id = 2;
+  string label = 3;
+  bytes public_key = 4;
+  int64 created_at = 5;
+  bool revoked = 6;
+}
+
+// ReputationScore for an identity.
+message ReputationScore {
+  string identity_id = 1;
+  int64 score = 2;
+  int64 total_calls = 3;
+  int64 successful_calls = 4;
+}
+
+// ServiceSchema describes what an agent does (agents only).
+message ServiceSchema {
+  string identity_id = 1;
+  string version = 2;
+  string proto_descriptor = 3; // serialized proto descriptor or URL
+  string description = 4;
+  repeated string capabilities = 5; // e.g. ["code-review", "deploy", "monitor"]
+}
+
+// --- Requests & Responses ---
+
+message PingRequest {}
+message PingResponse {
+  string message = 1;
+  int64 timestamp = 2;
+}
+
+// Register a new user identity.
+message RegisterRequest {
+  string name = 1;
+  string github = 2;
+  bytes public_key = 3;
+  string key_label = 4;
+}
+message RegisterResponse {
+  Identity identity = 1;
+  PublicKey key = 2;
+}
+
+// Create a child identity (agent or org) owned by the caller.
+message CreateIdentityRequest {
+  IdentityKind kind = 1;
+  string name = 2;
+  string description = 3;
+  bytes public_key = 4;     // optional — generate server-side if empty
+  map<string, string> meta = 5;
+}
+message CreateIdentityResponse {
+  Identity identity = 1;
+  PublicKey key = 2;
+}
+
+// List identities owned by the caller.
+message ListOwnedRequest {
+  IdentityKind kind = 1; // filter by kind, 0 = all
+}
+message ListOwnedResponse {
+  repeated Identity identities = 1;
+}
+
+// Membership management.
+message AddMemberRequest {
+  string group_id = 1;      // org or agent to add member to
+  string member_id = 2;     // identity to add
+  string role = 3;
+}
+message AddMemberResponse {
+  Membership membership = 1;
+}
+
+message ListMembersRequest {
+  string group_id = 1;
+}
+message ListMembersResponse {
+  repeated Membership members = 1;
+}
+
+message RemoveMemberRequest {
+  string group_id = 1;
+  string member_id = 2;
+}
+message RemoveMemberResponse {}
+
+// Key management.
+message AddKeyRequest {
+  bytes public_key = 1;
+  string label = 2;
+}
+message AddKeyResponse {
+  PublicKey key = 1;
+}
+
+message ListKeysRequest {}
+message ListKeysResponse {
+  repeated PublicKey keys = 1;
+}
+
+message RevokeKeyRequest {
+  string key_id = 1;
+}
+message RevokeKeyResponse {}
+
+// Lookup.
+message GetIdentityRequest {
+  string id = 1;
+}
+message GetIdentityResponse {
+  Identity identity = 1;
+}
+
+message WhoAmIRequest {}
+message WhoAmIResponse {
+  Identity identity = 1;
+}
+
+message GetReputationRequest {
+  string identity_id = 1;
+}
+message GetReputationResponse {
+  ReputationScore reputation = 1;
+}
+
+// DaoService is the core API for dao.pub.
+service DaoService {
+  // Public
+  rpc Ping(PingRequest) returns (PingResponse) {}
+  rpc Register(RegisterRequest) returns (RegisterResponse) {}
+
+  // Authenticated — identity management
+  rpc WhoAmI(WhoAmIRequest) returns (WhoAmIResponse) {}
+  rpc CreateIdentity(CreateIdentityRequest) returns (CreateIdentityResponse) {}
+  rpc ListOwned(ListOwnedRequest) returns (ListOwnedResponse) {}
+  rpc GetIdentity(GetIdentityRequest) returns (GetIdentityResponse) {}
+
+  // Authenticated — membership
+  rpc AddMember(AddMemberRequest) returns (AddMemberResponse) {}
+  rpc ListMembers(ListMembersRequest) returns (ListMembersResponse) {}
+  rpc RemoveMember(RemoveMemberRequest) returns (RemoveMemberResponse) {}
+
+  // Authenticated — key management
+  rpc AddKey(AddKeyRequest) returns (AddKeyResponse) {}
+  rpc ListKeys(ListKeysRequest) returns (ListKeysResponse) {}
+  rpc RevokeKey(RevokeKeyRequest) returns (RevokeKeyResponse) {}
+
+  // Authenticated — reputation
+  rpc GetReputation(GetReputationRequest) returns (GetReputationResponse) {}
+}
