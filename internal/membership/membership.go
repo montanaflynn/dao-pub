@@ -30,16 +30,27 @@ var (
 	ErrGroupNotFound    = errors.New("group not found")
 )
 
-// IdentityLookup is a function that checks whether an identity exists
-// and returns its owner ID. Used for authorization checks.
+// Members is the interface for group membership management.
+type Members interface {
+	AddMember(callerID, identityID, groupID string, role Role) (*daov1.Membership, error)
+	RemoveMember(callerID, identityID, groupID string) error
+	ListMembers(groupID string) []*daov1.Membership
+	BootstrapOwner(identityID, groupID string) *daov1.Membership
+	CanManage(callerID, groupID string) error
+}
+
+// IdentityLookup checks whether an identity exists and returns its owner ID.
 type IdentityLookup func(id string) (ownerID string, exists bool)
 
-// Registry manages group membership with built-in authorization.
+// Registry is the in-memory Members implementation.
 type Registry struct {
 	mu      sync.RWMutex
 	members map[string]map[string]*daov1.Membership // groupID -> identityID -> Membership
 	lookup  IdentityLookup
 }
+
+// Compile-time check that Registry implements Members.
+var _ Members = (*Registry)(nil)
 
 // NewRegistry creates a Registry. The lookup function is used to check
 // identity existence and ownership for authorization.
@@ -150,10 +161,6 @@ func (r *Registry) CanManage(callerID, groupID string) error {
 
 // checkAccess checks authorization. Caller must hold r.mu (read or write).
 func (r *Registry) checkAccess(callerID, groupID string) error {
-	// Check if caller owns the group identity.
-	// lookup calls IdentityStore.Get which has its own mutex — safe to call
-	// while holding r.mu since lock ordering is always: identity lock before
-	// membership lock (IdentityStore never calls back into Registry).
 	ownerID, exists := r.lookup(groupID)
 	if !exists {
 		return ErrGroupNotFound
@@ -162,7 +169,6 @@ func (r *Registry) checkAccess(callerID, groupID string) error {
 		return nil
 	}
 
-	// Check membership with owner/admin role.
 	group := r.members[groupID]
 	if group == nil {
 		return ErrPermissionDenied

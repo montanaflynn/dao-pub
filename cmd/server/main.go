@@ -21,7 +21,7 @@ import (
 
 type DaoServer struct {
 	identities store.IdentityStore
-	members    *membership.Registry
+	members    membership.Members
 	keys       *auth.KeyRegistry
 }
 
