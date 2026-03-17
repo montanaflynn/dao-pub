@@ -2,5 +2,5 @@ bin/
 tmp/
 gen/
 .claude/
-daocli
-server
+/daocli
+/server

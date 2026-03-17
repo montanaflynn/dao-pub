@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/ed25519"
 	"fmt"
 	"log"
 	"net/http"
@@ -12,6 +11,7 @@ import (
 	daov1 "dao.pub/gen/dao/v1"
 	"dao.pub/gen/dao/v1/daov1connect"
 	"dao.pub/internal/auth"
+	"dao.pub/internal/identity"
 
 	"connectrpc.com/connect"
 )
@@ -43,29 +43,25 @@ func (s *DaoServer) Register(
 	_ context.Context,
 	req *connect.Request[daov1.RegisterRequest],
 ) (*connect.Response[daov1.RegisterResponse], error) {
-	if len(req.Msg.PublicKey) != ed25519.PublicKeySize {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid ed25519 public key"))
+	if err := identity.ValidateEd25519Key(req.Msg.PublicKey); err != nil {
+		return nil, err
 	}
 
-	id := fmt.Sprintf("id_%s_%d", req.Msg.Name, time.Now().UnixNano())
-	identity := &daov1.Identity{
-		Id:        id,
-		Kind:      daov1.IdentityKind_IDENTITY_KIND_USER,
-		Name:      req.Msg.Name,
-		Github:    req.Msg.Github,
-		CreatedAt: time.Now().Unix(),
+	id, err := identity.NewUser(req.Msg.Name, req.Msg.Github)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
 	}
-	s.identities[id] = identity
+	s.identities[id.Id] = id
 
 	label := req.Msg.KeyLabel
 	if label == "" {
 		label = "default"
 	}
-	pk := s.keys.Add(id, label, req.Msg.PublicKey)
+	pk := s.keys.Add(id.Id, label, req.Msg.PublicKey)
 
-	log.Printf("registered user: %s (%s)", identity.Name, identity.Id)
+	log.Printf("registered user: %s (%s)", id.Name, id.Id)
 	return connect.NewResponse(&daov1.RegisterResponse{
-		Identity: identity,
+		Identity: id,
 		Key:      pk,
 	}), nil
 }
@@ -96,22 +92,32 @@ func (s *DaoServer) CreateIdentity(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("kind is required"))
 	}
 
-	id := fmt.Sprintf("id_%s_%d", req.Msg.Name, time.Now().UnixNano())
-	identity := &daov1.Identity{
-		Id:          id,
-		Kind:        req.Msg.Kind,
-		Name:        req.Msg.Name,
-		Description: req.Msg.Description,
-		OwnerId:     callerID,
-		CreatedAt:   time.Now().Unix(),
-		Meta:        req.Msg.Meta,
+	opts := []identity.Option{
+		identity.WithDescription(req.Msg.Description),
+		identity.WithMeta(req.Msg.Meta),
 	}
-	s.identities[id] = identity
+
+	var (
+		id  *daov1.Identity
+		err error
+	)
+	switch req.Msg.Kind {
+	case daov1.IdentityKind_IDENTITY_KIND_AGENT:
+		id, err = identity.NewAgent(req.Msg.Name, callerID, opts...)
+	case daov1.IdentityKind_IDENTITY_KIND_ORG:
+		id, err = identity.NewOrg(req.Msg.Name, callerID, opts...)
+	default:
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("unsupported kind: %v", req.Msg.Kind))
+	}
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	s.identities[id.Id] = id
 
 	// Register the public key if provided.
 	var pk *daov1.PublicKey
-	if len(req.Msg.PublicKey) == ed25519.PublicKeySize {
-		pk = s.keys.Add(id, "default", req.Msg.PublicKey)
+	if err := identity.ValidateEd25519Key(req.Msg.PublicKey); err == nil {
+		pk = s.keys.Add(id.Id, "default", req.Msg.PublicKey)
 	}
 
 	kindName := "agent"
@@ -120,15 +126,15 @@ func (s *DaoServer) CreateIdentity(
 		// Auto-add creator as owner member.
 		s.memberships = append(s.memberships, &daov1.Membership{
 			IdentityId: callerID,
-			GroupId:    id,
+			GroupId:    id.Id,
 			Role:       "owner",
 			JoinedAt:   time.Now().Unix(),
 		})
 	}
 
-	log.Printf("created %s: %s (%s) owned by %s", kindName, identity.Name, identity.Id, callerID)
+	log.Printf("created %s: %s (%s) owned by %s", kindName, id.Name, id.Id, callerID)
 	return connect.NewResponse(&daov1.CreateIdentityResponse{
-		Identity: identity,
+		Identity: id,
 		Key:      pk,
 	}), nil
 }
@@ -242,8 +248,8 @@ func (s *DaoServer) AddKey(
 	req *connect.Request[daov1.AddKeyRequest],
 ) (*connect.Response[daov1.AddKeyResponse], error) {
 	callerID, _ := auth.IdentityFromContext(ctx)
-	if len(req.Msg.PublicKey) != ed25519.PublicKeySize {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid ed25519 public key"))
+	if err := identity.ValidateEd25519Key(req.Msg.PublicKey); err != nil {
+		return nil, err
 	}
 	pk := s.keys.Add(callerID, req.Msg.Label, req.Msg.PublicKey)
 	return connect.NewResponse(&daov1.AddKeyResponse{Key: pk}), nil
