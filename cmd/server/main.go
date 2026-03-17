@@ -14,23 +14,24 @@ import (
 	"dao.pub/internal/auth"
 	"dao.pub/internal/identity"
 	"dao.pub/internal/membership"
+	"dao.pub/internal/store"
 
 	"connectrpc.com/connect"
 )
 
 type DaoServer struct {
-	identities map[string]*daov1.Identity
+	identities store.IdentityStore
 	members    *membership.Registry
 	keys       *auth.KeyRegistry
 }
 
-func NewDaoServer(keys *auth.KeyRegistry) *DaoServer {
+func NewDaoServer(ids store.IdentityStore, keys *auth.KeyRegistry) *DaoServer {
 	s := &DaoServer{
-		identities: make(map[string]*daov1.Identity),
+		identities: ids,
 		keys:       keys,
 	}
 	s.members = membership.NewRegistry(func(id string) (string, bool) {
-		ident, ok := s.identities[id]
+		ident, ok := s.identities.Get(id)
 		if !ok {
 			return "", false
 		}
@@ -61,7 +62,7 @@ func (s *DaoServer) Register(
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
-	s.identities[id.Id] = id
+	s.identities.Put(id)
 
 	label := req.Msg.KeyLabel
 	if label == "" {
@@ -122,7 +123,7 @@ func (s *DaoServer) CreateIdentity(
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
-	s.identities[id.Id] = id
+	s.identities.Put(id)
 
 	// Register the public key if provided.
 	var pk *daov1.PublicKey
@@ -148,19 +149,8 @@ func (s *DaoServer) ListOwned(
 	req *connect.Request[daov1.ListOwnedRequest],
 ) (*connect.Response[daov1.ListOwnedResponse], error) {
 	callerID, _ := auth.IdentityFromContext(ctx)
-
-	var result []*daov1.Identity
-	for _, id := range s.identities {
-		if id.OwnerId != callerID {
-			continue
-		}
-		if req.Msg.Kind != daov1.IdentityKind_IDENTITY_KIND_UNSPECIFIED && id.Kind != req.Msg.Kind {
-			continue
-		}
-		result = append(result, id)
-	}
 	return connect.NewResponse(&daov1.ListOwnedResponse{
-		Identities: result,
+		Identities: s.identities.ListByOwner(callerID, req.Msg.Kind),
 	}), nil
 }
 
@@ -168,7 +158,7 @@ func (s *DaoServer) GetIdentity(
 	_ context.Context,
 	req *connect.Request[daov1.GetIdentityRequest],
 ) (*connect.Response[daov1.GetIdentityResponse], error) {
-	ident, ok := s.identities[req.Msg.Id]
+	ident, ok := s.identities.Get(req.Msg.Id)
 	if !ok {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("identity %q not found", req.Msg.Id))
 	}
@@ -259,7 +249,7 @@ func (s *DaoServer) GetReputation(
 	_ context.Context,
 	req *connect.Request[daov1.GetReputationRequest],
 ) (*connect.Response[daov1.GetReputationResponse], error) {
-	if _, ok := s.identities[req.Msg.IdentityId]; !ok {
+	if _, ok := s.identities.Get(req.Msg.IdentityId); !ok {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("identity %q not found", req.Msg.IdentityId))
 	}
 	return connect.NewResponse(&daov1.GetReputationResponse{
@@ -276,7 +266,7 @@ func (s *DaoServer) GetReputation(
 
 func (s *DaoServer) callerIdentity(ctx context.Context) (*daov1.Identity, error) {
 	callerID, _ := auth.IdentityFromContext(ctx)
-	ident, ok := s.identities[callerID]
+	ident, ok := s.identities.Get(callerID)
 	if !ok {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("identity not found"))
 	}
@@ -301,7 +291,8 @@ func membershipError(err error) error {
 
 func main() {
 	keys := auth.NewKeyRegistry()
-	server := NewDaoServer(keys)
+	ids := store.NewMemoryStore()
+	server := NewDaoServer(ids, keys)
 	mux := http.NewServeMux()
 
 	path, handler := daov1connect.NewDaoServiceHandler(

@@ -15,6 +15,7 @@ import (
 	daov1 "dao.pub/gen/dao/v1"
 	"dao.pub/gen/dao/v1/daov1connect"
 	"dao.pub/internal/auth"
+	"dao.pub/internal/store"
 
 	"connectrpc.com/connect"
 )
@@ -31,7 +32,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
 
 	keys := auth.NewKeyRegistry()
-	server := NewDaoServer(keys)
+	server := NewDaoServer(store.NewMemoryStore(), keys)
 	mux := http.NewServeMux()
 	path, handler := daov1connect.NewDaoServiceHandler(
 		server,
@@ -329,7 +330,7 @@ func TestMembershipManagement(t *testing.T) {
 func TestPermissionDenied(t *testing.T) {
 	// Second user shouldn't be able to add members to first user's org.
 	keys := auth.NewKeyRegistry()
-	server := NewDaoServer(keys)
+	server := NewDaoServer(store.NewMemoryStore(), keys)
 	mux := http.NewServeMux()
 	path, handler := daov1connect.NewDaoServiceHandler(
 		server,
@@ -547,7 +548,7 @@ func TestAgentOwnsAgent(t *testing.T) {
 	// Demonstrate the "agents own agents" model.
 	// We need a separate setup since the agent needs its own keypair to auth.
 	keys := auth.NewKeyRegistry()
-	server := NewDaoServer(keys)
+	server := NewDaoServer(store.NewMemoryStore(), keys)
 	mux := http.NewServeMux()
 	path, handler := daov1connect.NewDaoServiceHandler(
 		server,
