@@ -51,12 +51,10 @@ func NewRegistry(lookup IdentityLookup) *Registry {
 }
 
 // AddMember adds identityID to groupID with role, authorized as callerID.
+// Authorization and mutation are atomic under a single lock.
 func (r *Registry) AddMember(callerID, identityID, groupID string, role Role) (*daov1.Membership, error) {
 	if !validRoles[role] {
 		return nil, ErrUnknownRole
-	}
-	if err := r.canManage(callerID, groupID); err != nil {
-		return nil, err
 	}
 	if _, exists := r.lookup(identityID); !exists {
 		return nil, ErrNotFound
@@ -64,6 +62,10 @@ func (r *Registry) AddMember(callerID, identityID, groupID string, role Role) (*
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	if err := r.checkAccess(callerID, groupID); err != nil {
+		return nil, err
+	}
 
 	group := r.members[groupID]
 	if group == nil {
@@ -85,13 +87,14 @@ func (r *Registry) AddMember(callerID, identityID, groupID string, role Role) (*
 }
 
 // RemoveMember removes identityID from groupID, authorized as callerID.
+// Authorization and mutation are atomic under a single lock.
 func (r *Registry) RemoveMember(callerID, identityID, groupID string) error {
-	if err := r.canManage(callerID, groupID); err != nil {
-		return err
-	}
-
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	if err := r.checkAccess(callerID, groupID); err != nil {
+		return err
+	}
 
 	group := r.members[groupID]
 	if group == nil {
@@ -140,11 +143,17 @@ func (r *Registry) BootstrapOwner(identityID, groupID string) *daov1.Membership 
 
 // CanManage reports whether callerID may add/remove members in groupID.
 func (r *Registry) CanManage(callerID, groupID string) error {
-	return r.canManage(callerID, groupID)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.checkAccess(callerID, groupID)
 }
 
-func (r *Registry) canManage(callerID, groupID string) error {
+// checkAccess checks authorization. Caller must hold r.mu (read or write).
+func (r *Registry) checkAccess(callerID, groupID string) error {
 	// Check if caller owns the group identity.
+	// lookup calls IdentityStore.Get which has its own mutex — safe to call
+	// while holding r.mu since lock ordering is always: identity lock before
+	// membership lock (IdentityStore never calls back into Registry).
 	ownerID, exists := r.lookup(groupID)
 	if !exists {
 		return ErrGroupNotFound
@@ -154,9 +163,6 @@ func (r *Registry) canManage(callerID, groupID string) error {
 	}
 
 	// Check membership with owner/admin role.
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
 	group := r.members[groupID]
 	if group == nil {
 		return ErrPermissionDenied
