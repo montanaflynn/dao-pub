@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -12,21 +13,30 @@ import (
 	"dao.pub/gen/dao/v1/daov1connect"
 	"dao.pub/internal/auth"
 	"dao.pub/internal/identity"
+	"dao.pub/internal/membership"
 
 	"connectrpc.com/connect"
 )
 
 type DaoServer struct {
-	identities  map[string]*daov1.Identity
-	memberships []*daov1.Membership
-	keys        *auth.KeyRegistry
+	identities map[string]*daov1.Identity
+	members    *membership.Registry
+	keys       *auth.KeyRegistry
 }
 
 func NewDaoServer(keys *auth.KeyRegistry) *DaoServer {
-	return &DaoServer{
+	s := &DaoServer{
 		identities: make(map[string]*daov1.Identity),
 		keys:       keys,
 	}
+	s.members = membership.NewRegistry(func(id string) (string, bool) {
+		ident, ok := s.identities[id]
+		if !ok {
+			return "", false
+		}
+		return ident.OwnerId, true
+	})
+	return s
 }
 
 func (s *DaoServer) Ping(
@@ -70,12 +80,12 @@ func (s *DaoServer) WhoAmI(
 	ctx context.Context,
 	_ *connect.Request[daov1.WhoAmIRequest],
 ) (*connect.Response[daov1.WhoAmIResponse], error) {
-	identity, err := s.callerIdentity(ctx)
+	ident, err := s.callerIdentity(ctx)
 	if err != nil {
 		return nil, err
 	}
 	return connect.NewResponse(&daov1.WhoAmIResponse{
-		Identity: identity,
+		Identity: ident,
 	}), nil
 }
 
@@ -123,13 +133,7 @@ func (s *DaoServer) CreateIdentity(
 	kindName := "agent"
 	if req.Msg.Kind == daov1.IdentityKind_IDENTITY_KIND_ORG {
 		kindName = "org"
-		// Auto-add creator as owner member.
-		s.memberships = append(s.memberships, &daov1.Membership{
-			IdentityId: callerID,
-			GroupId:    id.Id,
-			Role:       "owner",
-			JoinedAt:   time.Now().Unix(),
-		})
+		s.members.BootstrapOwner(callerID, id.Id)
 	}
 
 	log.Printf("created %s: %s (%s) owned by %s", kindName, id.Name, id.Id, callerID)
@@ -164,12 +168,12 @@ func (s *DaoServer) GetIdentity(
 	_ context.Context,
 	req *connect.Request[daov1.GetIdentityRequest],
 ) (*connect.Response[daov1.GetIdentityResponse], error) {
-	identity, ok := s.identities[req.Msg.Id]
+	ident, ok := s.identities[req.Msg.Id]
 	if !ok {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("identity %q not found", req.Msg.Id))
 	}
 	return connect.NewResponse(&daov1.GetIdentityResponse{
-		Identity: identity,
+		Identity: ident,
 	}), nil
 }
 
@@ -179,28 +183,15 @@ func (s *DaoServer) AddMember(
 ) (*connect.Response[daov1.AddMemberResponse], error) {
 	callerID, _ := auth.IdentityFromContext(ctx)
 
-	// Verify caller owns or is admin of the group.
-	if err := s.requireGroupAccess(callerID, req.Msg.GroupId); err != nil {
-		return nil, err
-	}
-
-	// Verify the member identity exists.
-	if _, ok := s.identities[req.Msg.MemberId]; !ok {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("member identity %q not found", req.Msg.MemberId))
-	}
-
-	role := req.Msg.Role
+	role := membership.Role(req.Msg.Role)
 	if role == "" {
-		role = "member"
+		role = membership.RoleMember
 	}
 
-	m := &daov1.Membership{
-		IdentityId: req.Msg.MemberId,
-		GroupId:    req.Msg.GroupId,
-		Role:       role,
-		JoinedAt:   time.Now().Unix(),
+	m, err := s.members.AddMember(callerID, req.Msg.MemberId, req.Msg.GroupId, role)
+	if err != nil {
+		return nil, membershipError(err)
 	}
-	s.memberships = append(s.memberships, m)
 
 	log.Printf("added member %s to %s as %s", req.Msg.MemberId, req.Msg.GroupId, role)
 	return connect.NewResponse(&daov1.AddMemberResponse{
@@ -212,14 +203,8 @@ func (s *DaoServer) ListMembers(
 	_ context.Context,
 	req *connect.Request[daov1.ListMembersRequest],
 ) (*connect.Response[daov1.ListMembersResponse], error) {
-	var result []*daov1.Membership
-	for _, m := range s.memberships {
-		if m.GroupId == req.Msg.GroupId {
-			result = append(result, m)
-		}
-	}
 	return connect.NewResponse(&daov1.ListMembersResponse{
-		Members: result,
+		Members: s.members.ListMembers(req.Msg.GroupId),
 	}), nil
 }
 
@@ -229,18 +214,12 @@ func (s *DaoServer) RemoveMember(
 ) (*connect.Response[daov1.RemoveMemberResponse], error) {
 	callerID, _ := auth.IdentityFromContext(ctx)
 
-	if err := s.requireGroupAccess(callerID, req.Msg.GroupId); err != nil {
-		return nil, err
+	if err := s.members.RemoveMember(callerID, req.Msg.MemberId, req.Msg.GroupId); err != nil {
+		return nil, membershipError(err)
 	}
 
-	for i, m := range s.memberships {
-		if m.GroupId == req.Msg.GroupId && m.IdentityId == req.Msg.MemberId {
-			s.memberships = append(s.memberships[:i], s.memberships[i+1:]...)
-			log.Printf("removed member %s from %s", req.Msg.MemberId, req.Msg.GroupId)
-			return connect.NewResponse(&daov1.RemoveMemberResponse{}), nil
-		}
-	}
-	return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("membership not found"))
+	log.Printf("removed member %s from %s", req.Msg.MemberId, req.Msg.GroupId)
+	return connect.NewResponse(&daov1.RemoveMemberResponse{}), nil
 }
 
 func (s *DaoServer) AddKey(
@@ -297,31 +276,27 @@ func (s *DaoServer) GetReputation(
 
 func (s *DaoServer) callerIdentity(ctx context.Context) (*daov1.Identity, error) {
 	callerID, _ := auth.IdentityFromContext(ctx)
-	identity, ok := s.identities[callerID]
+	ident, ok := s.identities[callerID]
 	if !ok {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("identity not found"))
 	}
-	return identity, nil
+	return ident, nil
 }
 
-func (s *DaoServer) requireGroupAccess(callerID, groupID string) error {
-	// Owner of the group identity has access.
-	group, ok := s.identities[groupID]
-	if !ok {
-		return connect.NewError(connect.CodeNotFound, fmt.Errorf("group %q not found", groupID))
+// membershipError maps membership sentinel errors to connect errors.
+func membershipError(err error) error {
+	switch {
+	case errors.Is(err, membership.ErrPermissionDenied):
+		return connect.NewError(connect.CodePermissionDenied, err)
+	case errors.Is(err, membership.ErrNotFound), errors.Is(err, membership.ErrGroupNotFound):
+		return connect.NewError(connect.CodeNotFound, err)
+	case errors.Is(err, membership.ErrDuplicate):
+		return connect.NewError(connect.CodeAlreadyExists, err)
+	case errors.Is(err, membership.ErrUnknownRole):
+		return connect.NewError(connect.CodeInvalidArgument, err)
+	default:
+		return connect.NewError(connect.CodeInternal, err)
 	}
-	if group.OwnerId == callerID {
-		return nil
-	}
-	// Check membership with owner/admin role.
-	for _, m := range s.memberships {
-		if m.GroupId == groupID && m.IdentityId == callerID {
-			if m.Role == "owner" || m.Role == "admin" {
-				return nil
-			}
-		}
-	}
-	return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("not authorized"))
 }
 
 func main() {
