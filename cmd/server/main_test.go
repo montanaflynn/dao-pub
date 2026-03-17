@@ -86,7 +86,6 @@ func TestPing(t *testing.T) {
 
 func TestRegisterAndWhoAmI(t *testing.T) {
 	env := newTestEnv(t)
-
 	reg := env.register(t, "montana", "montanaflynn")
 
 	if reg.Identity.Name != "montana" {
@@ -95,11 +94,13 @@ func TestRegisterAndWhoAmI(t *testing.T) {
 	if reg.Identity.Kind != daov1.IdentityKind_IDENTITY_KIND_USER {
 		t.Fatalf("expected user kind, got %v", reg.Identity.Kind)
 	}
+	if reg.Identity.UserType != daov1.UserType_USER_TYPE_HUMAN {
+		t.Fatalf("expected human user type, got %v", reg.Identity.UserType)
+	}
 	if reg.Key == nil {
 		t.Fatal("expected public key in response")
 	}
 
-	// WhoAmI should return the same identity.
 	req := connect.NewRequest(&daov1.WhoAmIRequest{})
 	env.sign(req, "/dao.v1.DaoService/WhoAmI")
 	whoami, err := env.client.WhoAmI(context.Background(), req)
@@ -113,8 +114,6 @@ func TestRegisterAndWhoAmI(t *testing.T) {
 
 func TestUnauthenticatedRequestFails(t *testing.T) {
 	env := newTestEnv(t)
-
-	// WhoAmI without signing should fail.
 	_, err := env.client.WhoAmI(context.Background(), connect.NewRequest(&daov1.WhoAmIRequest{}))
 	if err == nil {
 		t.Fatal("expected error for unauthenticated request")
@@ -128,20 +127,22 @@ func TestCreateAgent(t *testing.T) {
 	env := newTestEnv(t)
 	reg := env.register(t, "montana", "montanaflynn")
 
-	req := connect.NewRequest(&daov1.CreateIdentityRequest{
-		Kind:        daov1.IdentityKind_IDENTITY_KIND_AGENT,
+	req := connect.NewRequest(&daov1.CreateAgentRequest{
 		Name:        "code-reviewer",
 		Description: "reviews pull requests",
 	})
-	env.sign(req, "/dao.v1.DaoService/CreateIdentity")
-	res, err := env.client.CreateIdentity(context.Background(), req)
+	env.sign(req, "/dao.v1.DaoService/CreateAgent")
+	res, err := env.client.CreateAgent(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	agent := res.Msg.Identity
-	if agent.Kind != daov1.IdentityKind_IDENTITY_KIND_AGENT {
-		t.Fatalf("expected agent kind, got %v", agent.Kind)
+	if agent.Kind != daov1.IdentityKind_IDENTITY_KIND_USER {
+		t.Fatalf("expected user kind, got %v", agent.Kind)
+	}
+	if agent.UserType != daov1.UserType_USER_TYPE_AGENT {
+		t.Fatalf("expected agent user type, got %v", agent.UserType)
 	}
 	if agent.Name != "code-reviewer" {
 		t.Fatalf("expected code-reviewer, got %q", agent.Name)
@@ -155,13 +156,12 @@ func TestCreateOrg(t *testing.T) {
 	env := newTestEnv(t)
 	reg := env.register(t, "montana", "montanaflynn")
 
-	req := connect.NewRequest(&daov1.CreateIdentityRequest{
-		Kind:        daov1.IdentityKind_IDENTITY_KIND_ORG,
+	req := connect.NewRequest(&daov1.CreateOrgRequest{
 		Name:        "acme-labs",
 		Description: "building the future",
 	})
-	env.sign(req, "/dao.v1.DaoService/CreateIdentity")
-	res, err := env.client.CreateIdentity(context.Background(), req)
+	env.sign(req, "/dao.v1.DaoService/CreateOrg")
+	res, err := env.client.CreateOrg(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,42 +189,21 @@ func TestCreateOrg(t *testing.T) {
 	}
 }
 
-func TestCreateUserIdentityFails(t *testing.T) {
-	env := newTestEnv(t)
-	env.register(t, "montana", "montanaflynn")
-
-	req := connect.NewRequest(&daov1.CreateIdentityRequest{
-		Kind: daov1.IdentityKind_IDENTITY_KIND_USER,
-		Name: "sneaky",
-	})
-	env.sign(req, "/dao.v1.DaoService/CreateIdentity")
-	_, err := env.client.CreateIdentity(context.Background(), req)
-	if err == nil {
-		t.Fatal("expected error when creating user via CreateIdentity")
-	}
-}
-
 func TestListOwned(t *testing.T) {
 	env := newTestEnv(t)
 	env.register(t, "montana", "montanaflynn")
 
 	// Create 2 agents and 1 org.
 	for _, name := range []string{"agent-a", "agent-b"} {
-		req := connect.NewRequest(&daov1.CreateIdentityRequest{
-			Kind: daov1.IdentityKind_IDENTITY_KIND_AGENT,
-			Name: name,
-		})
-		env.sign(req, "/dao.v1.DaoService/CreateIdentity")
-		if _, err := env.client.CreateIdentity(context.Background(), req); err != nil {
+		req := connect.NewRequest(&daov1.CreateAgentRequest{Name: name})
+		env.sign(req, "/dao.v1.DaoService/CreateAgent")
+		if _, err := env.client.CreateAgent(context.Background(), req); err != nil {
 			t.Fatal(err)
 		}
 	}
-	orgReq := connect.NewRequest(&daov1.CreateIdentityRequest{
-		Kind: daov1.IdentityKind_IDENTITY_KIND_ORG,
-		Name: "my-org",
-	})
-	env.sign(orgReq, "/dao.v1.DaoService/CreateIdentity")
-	if _, err := env.client.CreateIdentity(context.Background(), orgReq); err != nil {
+	orgReq := connect.NewRequest(&daov1.CreateOrgRequest{Name: "my-org"})
+	env.sign(orgReq, "/dao.v1.DaoService/CreateOrg")
+	if _, err := env.client.CreateOrg(context.Background(), orgReq); err != nil {
 		t.Fatal(err)
 	}
 
@@ -239,15 +218,15 @@ func TestListOwned(t *testing.T) {
 		t.Fatalf("expected 3 owned, got %d", len(allRes.Msg.Identities))
 	}
 
-	// Filter agents only.
-	agentReq := connect.NewRequest(&daov1.ListOwnedRequest{Kind: daov1.IdentityKind_IDENTITY_KIND_AGENT})
-	env.sign(agentReq, "/dao.v1.DaoService/ListOwned")
-	agentRes, err := env.client.ListOwned(context.Background(), agentReq)
+	// Filter by user kind (agents are users).
+	userReq := connect.NewRequest(&daov1.ListOwnedRequest{Kind: daov1.IdentityKind_IDENTITY_KIND_USER})
+	env.sign(userReq, "/dao.v1.DaoService/ListOwned")
+	userRes, err := env.client.ListOwned(context.Background(), userReq)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(agentRes.Msg.Identities) != 2 {
-		t.Fatalf("expected 2 agents, got %d", len(agentRes.Msg.Identities))
+	if len(userRes.Msg.Identities) != 2 {
+		t.Fatalf("expected 2 users (agents), got %d", len(userRes.Msg.Identities))
 	}
 }
 
@@ -256,24 +235,18 @@ func TestMembershipManagement(t *testing.T) {
 	env.register(t, "montana", "montanaflynn")
 
 	// Create an org.
-	orgReq := connect.NewRequest(&daov1.CreateIdentityRequest{
-		Kind: daov1.IdentityKind_IDENTITY_KIND_ORG,
-		Name: "team",
-	})
-	env.sign(orgReq, "/dao.v1.DaoService/CreateIdentity")
-	orgRes, err := env.client.CreateIdentity(context.Background(), orgReq)
+	orgReq := connect.NewRequest(&daov1.CreateOrgRequest{Name: "team"})
+	env.sign(orgReq, "/dao.v1.DaoService/CreateOrg")
+	orgRes, err := env.client.CreateOrg(context.Background(), orgReq)
 	if err != nil {
 		t.Fatal(err)
 	}
 	orgID := orgRes.Msg.Identity.Id
 
 	// Create an agent to add as member.
-	agentReq := connect.NewRequest(&daov1.CreateIdentityRequest{
-		Kind: daov1.IdentityKind_IDENTITY_KIND_AGENT,
-		Name: "bot",
-	})
-	env.sign(agentReq, "/dao.v1.DaoService/CreateIdentity")
-	agentRes, err := env.client.CreateIdentity(context.Background(), agentReq)
+	agentReq := connect.NewRequest(&daov1.CreateAgentRequest{Name: "bot"})
+	env.sign(agentReq, "/dao.v1.DaoService/CreateAgent")
+	agentRes, err := env.client.CreateAgent(context.Background(), agentReq)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,7 +301,6 @@ func TestMembershipManagement(t *testing.T) {
 }
 
 func TestPermissionDenied(t *testing.T) {
-	// Second user shouldn't be able to add members to first user's org.
 	keys := auth.NewKeyRegistry()
 	server := NewDaoServer(store.NewMemoryStore(), keys)
 	mux := http.NewServeMux()
@@ -354,12 +326,9 @@ func TestPermissionDenied(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	orgReq := connect.NewRequest(&daov1.CreateIdentityRequest{
-		Kind: daov1.IdentityKind_IDENTITY_KIND_ORG,
-		Name: "private-org",
-	})
-	signer1.Sign(orgReq, "/dao.v1.DaoService/CreateIdentity")
-	orgRes, err := client.CreateIdentity(ctx, orgReq)
+	orgReq := connect.NewRequest(&daov1.CreateOrgRequest{Name: "private-org"})
+	signer1.Sign(orgReq, "/dao.v1.DaoService/CreateOrg")
+	orgRes, err := client.CreateOrg(ctx, orgReq)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -396,7 +365,6 @@ func TestGetIdentityAndReputation(t *testing.T) {
 	env := newTestEnv(t)
 	reg := env.register(t, "montana", "montanaflynn")
 
-	// GetIdentity
 	getReq := connect.NewRequest(&daov1.GetIdentityRequest{Id: reg.Identity.Id})
 	env.sign(getReq, "/dao.v1.DaoService/GetIdentity")
 	getRes, err := env.client.GetIdentity(context.Background(), getReq)
@@ -407,7 +375,6 @@ func TestGetIdentityAndReputation(t *testing.T) {
 		t.Fatalf("expected montana, got %q", getRes.Msg.Identity.Name)
 	}
 
-	// GetIdentity for non-existent ID.
 	badReq := connect.NewRequest(&daov1.GetIdentityRequest{Id: "nope"})
 	env.sign(badReq, "/dao.v1.DaoService/GetIdentity")
 	_, err = env.client.GetIdentity(context.Background(), badReq)
@@ -418,7 +385,6 @@ func TestGetIdentityAndReputation(t *testing.T) {
 		t.Fatalf("expected not_found, got %v", connect.CodeOf(err))
 	}
 
-	// GetReputation
 	repReq := connect.NewRequest(&daov1.GetReputationRequest{IdentityId: reg.Identity.Id})
 	env.sign(repReq, "/dao.v1.DaoService/GetReputation")
 	repRes, err := env.client.GetReputation(context.Background(), repReq)
@@ -434,7 +400,6 @@ func TestKeyManagement(t *testing.T) {
 	env := newTestEnv(t)
 	env.register(t, "montana", "montanaflynn")
 
-	// List keys — should have 1 from registration.
 	listReq := connect.NewRequest(&daov1.ListKeysRequest{})
 	env.sign(listReq, "/dao.v1.DaoService/ListKeys")
 	listRes, err := env.client.ListKeys(context.Background(), listReq)
@@ -446,19 +411,14 @@ func TestKeyManagement(t *testing.T) {
 	}
 	keyID := listRes.Msg.Keys[0].Id
 
-	// Add a second key.
 	pub2, _, _ := ed25519.GenerateKey(rand.Reader)
-	addReq := connect.NewRequest(&daov1.AddKeyRequest{
-		PublicKey: pub2,
-		Label:    "backup",
-	})
+	addReq := connect.NewRequest(&daov1.AddKeyRequest{PublicKey: pub2, Label: "backup"})
 	env.sign(addReq, "/dao.v1.DaoService/AddKey")
 	_, err = env.client.AddKey(context.Background(), addReq)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// List again — should have 2.
 	listReq2 := connect.NewRequest(&daov1.ListKeysRequest{})
 	env.sign(listReq2, "/dao.v1.DaoService/ListKeys")
 	listRes2, err := env.client.ListKeys(context.Background(), listReq2)
@@ -469,7 +429,6 @@ func TestKeyManagement(t *testing.T) {
 		t.Fatalf("expected 2 keys, got %d", len(listRes2.Msg.Keys))
 	}
 
-	// Find the backup key ID.
 	var backupKeyID string
 	for _, k := range listRes2.Msg.Keys {
 		if k.Id != keyID {
@@ -477,7 +436,6 @@ func TestKeyManagement(t *testing.T) {
 		}
 	}
 
-	// Revoke the backup key (not the one we're signing with).
 	revokeReq := connect.NewRequest(&daov1.RevokeKeyRequest{KeyId: backupKeyID})
 	env.sign(revokeReq, "/dao.v1.DaoService/RevokeKey")
 	_, err = env.client.RevokeKey(context.Background(), revokeReq)
@@ -485,7 +443,6 @@ func TestKeyManagement(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Verify it's revoked.
 	listReq3 := connect.NewRequest(&daov1.ListKeysRequest{})
 	env.sign(listReq3, "/dao.v1.DaoService/ListKeys")
 	listRes3, err := env.client.ListKeys(context.Background(), listReq3)
@@ -503,7 +460,6 @@ func TestExpiredSignatureFails(t *testing.T) {
 	env := newTestEnv(t)
 	env.register(t, "montana", "montanaflynn")
 
-	// Sign with a timestamp 60 seconds in the past.
 	req := connect.NewRequest(&daov1.WhoAmIRequest{})
 	procedure := "/dao.v1.DaoService/WhoAmI"
 	oldTs := strconv.FormatInt(time.Now().Unix()-60, 10)
@@ -525,7 +481,6 @@ func TestWrongKeyFails(t *testing.T) {
 	env := newTestEnv(t)
 	env.register(t, "montana", "montanaflynn")
 
-	// Sign with a completely different key.
 	_, wrongPriv, _ := ed25519.GenerateKey(rand.Reader)
 	req := connect.NewRequest(&daov1.WhoAmIRequest{})
 	procedure := "/dao.v1.DaoService/WhoAmI"
@@ -545,8 +500,6 @@ func TestWrongKeyFails(t *testing.T) {
 }
 
 func TestAgentOwnsAgent(t *testing.T) {
-	// Demonstrate the "agents own agents" model.
-	// We need a separate setup since the agent needs its own keypair to auth.
 	keys := auth.NewKeyRegistry()
 	server := NewDaoServer(store.NewMemoryStore(), keys)
 	mux := http.NewServeMux()
@@ -561,7 +514,7 @@ func TestAgentOwnsAgent(t *testing.T) {
 	client := daov1connect.NewDaoServiceClient(http.DefaultClient, ts.URL)
 	ctx := context.Background()
 
-	// Register a user.
+	// Register a human.
 	userPub, userPriv, _ := ed25519.GenerateKey(rand.Reader)
 	userSigner := auth.NewSigner(userPriv)
 	_, err := client.Register(ctx, connect.NewRequest(&daov1.RegisterRequest{
@@ -571,29 +524,27 @@ func TestAgentOwnsAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// User creates an agent with its own keypair.
+	// Human creates an agent with its own keypair.
 	agentPub, agentPriv, _ := ed25519.GenerateKey(rand.Reader)
 	agentSigner := auth.NewSigner(agentPriv)
-	createReq := connect.NewRequest(&daov1.CreateIdentityRequest{
-		Kind:      daov1.IdentityKind_IDENTITY_KIND_AGENT,
+	createReq := connect.NewRequest(&daov1.CreateAgentRequest{
 		Name:      "orchestrator",
 		PublicKey: agentPub,
 	})
-	userSigner.Sign(createReq, "/dao.v1.DaoService/CreateIdentity")
-	agentRes, err := client.CreateIdentity(ctx, createReq)
+	userSigner.Sign(createReq, "/dao.v1.DaoService/CreateAgent")
+	agentRes, err := client.CreateAgent(ctx, createReq)
 	if err != nil {
 		t.Fatal(err)
 	}
 	orchestratorID := agentRes.Msg.Identity.Id
 
-	// The agent (orchestrator) authenticates with its own key and creates a sub-agent.
-	subAgentReq := connect.NewRequest(&daov1.CreateIdentityRequest{
-		Kind:        daov1.IdentityKind_IDENTITY_KIND_AGENT,
+	// The agent creates a sub-agent.
+	subAgentReq := connect.NewRequest(&daov1.CreateAgentRequest{
 		Name:        "sub-worker",
 		Description: "spawned by orchestrator",
 	})
-	agentSigner.Sign(subAgentReq, "/dao.v1.DaoService/CreateIdentity")
-	subRes, err := client.CreateIdentity(ctx, subAgentReq)
+	agentSigner.Sign(subAgentReq, "/dao.v1.DaoService/CreateAgent")
+	subRes, err := client.CreateAgent(ctx, subAgentReq)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -601,10 +552,9 @@ func TestAgentOwnsAgent(t *testing.T) {
 	if subRes.Msg.Identity.OwnerId != orchestratorID {
 		t.Fatalf("expected sub-agent owned by orchestrator %q, got %q", orchestratorID, subRes.Msg.Identity.OwnerId)
 	}
-	if subRes.Msg.Identity.Name != "sub-worker" {
-		t.Fatalf("expected sub-worker, got %q", subRes.Msg.Identity.Name)
+	if subRes.Msg.Identity.UserType != daov1.UserType_USER_TYPE_AGENT {
+		t.Fatalf("expected agent user type, got %v", subRes.Msg.Identity.UserType)
 	}
 
-	// Verify the ownership chain: user -> orchestrator -> sub-worker.
 	fmt.Printf("ownership: human -> %s -> %s\n", orchestratorID, subRes.Msg.Identity.Id)
 }

@@ -58,7 +58,7 @@ func (s *DaoServer) Register(
 		return nil, err
 	}
 
-	id, err := identity.NewUser(req.Msg.Name, req.Msg.Github)
+	id, err := identity.NewHuman(req.Msg.Name, req.Msg.Github)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -70,7 +70,7 @@ func (s *DaoServer) Register(
 	}
 	pk := s.keys.Add(id.Id, label, req.Msg.PublicKey)
 
-	log.Printf("registered user: %s (%s)", id.Name, id.Id)
+	log.Printf("registered human: %s (%s)", id.Name, id.Id)
 	return connect.NewResponse(&daov1.RegisterResponse{
 		Identity: id,
 		Key:      pk,
@@ -90,36 +90,18 @@ func (s *DaoServer) WhoAmI(
 	}), nil
 }
 
-func (s *DaoServer) CreateIdentity(
+func (s *DaoServer) CreateAgent(
 	ctx context.Context,
-	req *connect.Request[daov1.CreateIdentityRequest],
-) (*connect.Response[daov1.CreateIdentityResponse], error) {
+	req *connect.Request[daov1.CreateAgentRequest],
+) (*connect.Response[daov1.CreateAgentResponse], error) {
 	callerID, _ := auth.IdentityFromContext(ctx)
-
-	if req.Msg.Kind == daov1.IdentityKind_IDENTITY_KIND_USER {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("use Register to create user identities"))
-	}
-	if req.Msg.Kind == daov1.IdentityKind_IDENTITY_KIND_UNSPECIFIED {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("kind is required"))
-	}
 
 	opts := []identity.Option{
 		identity.WithDescription(req.Msg.Description),
 		identity.WithMeta(req.Msg.Meta),
 	}
 
-	var (
-		id  *daov1.Identity
-		err error
-	)
-	switch req.Msg.Kind {
-	case daov1.IdentityKind_IDENTITY_KIND_AGENT:
-		id, err = identity.NewAgent(req.Msg.Name, callerID, opts...)
-	case daov1.IdentityKind_IDENTITY_KIND_ORG:
-		id, err = identity.NewOrg(req.Msg.Name, callerID, opts...)
-	default:
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("unsupported kind: %v", req.Msg.Kind))
-	}
+	id, err := identity.NewAgent(req.Msg.Name, callerID, opts...)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -131,16 +113,35 @@ func (s *DaoServer) CreateIdentity(
 		pk = s.keys.Add(id.Id, "default", req.Msg.PublicKey)
 	}
 
-	kindName := "agent"
-	if req.Msg.Kind == daov1.IdentityKind_IDENTITY_KIND_ORG {
-		kindName = "org"
-		s.members.BootstrapOwner(callerID, id.Id)
-	}
-
-	log.Printf("created %s: %s (%s) owned by %s", kindName, id.Name, id.Id, callerID)
-	return connect.NewResponse(&daov1.CreateIdentityResponse{
+	log.Printf("created agent: %s (%s) owned by %s", id.Name, id.Id, callerID)
+	return connect.NewResponse(&daov1.CreateAgentResponse{
 		Identity: id,
 		Key:      pk,
+	}), nil
+}
+
+func (s *DaoServer) CreateOrg(
+	ctx context.Context,
+	req *connect.Request[daov1.CreateOrgRequest],
+) (*connect.Response[daov1.CreateOrgResponse], error) {
+	callerID, _ := auth.IdentityFromContext(ctx)
+
+	opts := []identity.Option{
+		identity.WithDescription(req.Msg.Description),
+		identity.WithMeta(req.Msg.Meta),
+	}
+
+	id, err := identity.NewOrg(req.Msg.Name, callerID, opts...)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	s.identities.Put(id)
+
+	s.members.BootstrapOwner(callerID, id.Id)
+
+	log.Printf("created org: %s (%s) owned by %s", id.Name, id.Id, callerID)
+	return connect.NewResponse(&daov1.CreateOrgResponse{
+		Identity: id,
 	}), nil
 }
 
@@ -273,7 +274,6 @@ func (s *DaoServer) callerIdentity(ctx context.Context) (*daov1.Identity, error)
 	return ident, nil
 }
 
-// membershipError maps membership sentinel errors to connect errors.
 func membershipError(err error) error {
 	switch {
 	case errors.Is(err, membership.ErrPermissionDenied):

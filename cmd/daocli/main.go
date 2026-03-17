@@ -98,35 +98,40 @@ func main() {
 			desc = os.Args[4]
 		}
 
-		var kind daov1.IdentityKind
 		switch kindStr {
 		case "agent":
-			kind = daov1.IdentityKind_IDENTITY_KIND_AGENT
+			req := connect.NewRequest(&daov1.CreateAgentRequest{
+				Name:        name,
+				Description: desc,
+			})
+			signReq(req, "/dao.v1.DaoService/CreateAgent")
+			res, err := client.CreateAgent(ctx, req)
+			if err != nil {
+				log.Fatal(err)
+			}
+			printIdentity(res.Msg.Identity)
 		case "org":
-			kind = daov1.IdentityKind_IDENTITY_KIND_ORG
+			req := connect.NewRequest(&daov1.CreateOrgRequest{
+				Name:        name,
+				Description: desc,
+			})
+			signReq(req, "/dao.v1.DaoService/CreateOrg")
+			res, err := client.CreateOrg(ctx, req)
+			if err != nil {
+				log.Fatal(err)
+			}
+			printIdentity(res.Msg.Identity)
 		default:
 			log.Fatalf("unknown kind: %s (use agent or org)", kindStr)
 		}
 
-		req := connect.NewRequest(&daov1.CreateIdentityRequest{
-			Kind:        kind,
-			Name:        name,
-			Description: desc,
-		})
-		signReq(req, "/dao.v1.DaoService/CreateIdentity")
-		res, err := client.CreateIdentity(ctx, req)
-		if err != nil {
-			log.Fatal(err)
-		}
-		printIdentity(res.Msg.Identity)
-
 	case "owned":
-		// daocli owned [agent|org]
+		// daocli owned [user|org]
 		var kind daov1.IdentityKind
 		if len(os.Args) > 2 {
 			switch os.Args[2] {
-			case "agent":
-				kind = daov1.IdentityKind_IDENTITY_KIND_AGENT
+			case "user", "agent":
+				kind = daov1.IdentityKind_IDENTITY_KIND_USER
 			case "org":
 				kind = daov1.IdentityKind_IDENTITY_KIND_ORG
 			}
@@ -138,7 +143,7 @@ func main() {
 			log.Fatal(err)
 		}
 		for _, id := range res.Msg.Identities {
-			fmt.Printf("%-8s %-20s %s\n", kindLabel(id.Kind), id.Name, id.Id)
+			fmt.Printf("%-8s %-20s %s\n", kindLabel(id), id.Name, id.Id)
 		}
 		if len(res.Msg.Identities) == 0 {
 			fmt.Println("(none)")
@@ -297,7 +302,7 @@ func printUsage() {
 
 func printIdentity(id *daov1.Identity) {
 	fmt.Printf("id:    %s\n", id.Id)
-	fmt.Printf("kind:  %s\n", kindLabel(id.Kind))
+	fmt.Printf("kind:  %s\n", kindLabel(id))
 	fmt.Printf("name:  %s\n", id.Name)
 	if id.Description != "" {
 		fmt.Printf("desc:  %s\n", id.Description)
@@ -310,12 +315,13 @@ func printIdentity(id *daov1.Identity) {
 	}
 }
 
-func kindLabel(k daov1.IdentityKind) string {
-	switch k {
+func kindLabel(id *daov1.Identity) string {
+	switch id.Kind {
 	case daov1.IdentityKind_IDENTITY_KIND_USER:
-		return "user"
-	case daov1.IdentityKind_IDENTITY_KIND_AGENT:
-		return "agent"
+		if id.UserType == daov1.UserType_USER_TYPE_AGENT {
+			return "agent"
+		}
+		return "human"
 	case daov1.IdentityKind_IDENTITY_KIND_ORG:
 		return "org"
 	default:

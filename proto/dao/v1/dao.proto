@@ -8,26 +8,33 @@ option go_package = "dao.pub/gen/dao/v1;daov1";
 enum IdentityKind {
   IDENTITY_KIND_UNSPECIFIED = 0;
   IDENTITY_KIND_USER = 1;
-  IDENTITY_KIND_AGENT = 2;
   IDENTITY_KIND_ORG = 3;
 }
 
-// Identity is the universal primitive — users, agents, and orgs are all identities.
+// UserType distinguishes human from agent users.
+enum UserType {
+  USER_TYPE_UNSPECIFIED = 0;
+  USER_TYPE_HUMAN = 1;
+  USER_TYPE_AGENT = 2;
+}
+
+// Identity is the universal primitive — users and orgs are all identities.
 message Identity {
   string id = 1;
   IdentityKind kind = 2;
   string name = 3;
   string description = 4;
   string github = 5;
-  string owner_id = 6;       // parent identity (e.g. user owns agent, org owns agent)
+  string owner_id = 6;       // parent identity (human owns agent, org owns agent, etc.)
   int64 created_at = 7;
-  map<string, string> meta = 8; // extensible metadata
+  map<string, string> meta = 8;
+  UserType user_type = 9;    // only set when kind = USER
 }
 
-// Membership links an identity to an org or agent as a member/operator.
+// Membership links an identity to an org as a member.
 message Membership {
   string identity_id = 1;    // the member
-  string group_id = 2;       // the org or agent they belong to
+  string group_id = 2;       // the org they belong to
   string role = 3;           // "owner", "admin", "member", "operator"
   int64 joined_at = 4;
 }
@@ -50,13 +57,13 @@ message ReputationScore {
   int64 successful_calls = 4;
 }
 
-// ServiceSchema describes what an agent does (agents only).
+// ServiceSchema describes what an agent does.
 message ServiceSchema {
   string identity_id = 1;
   string version = 2;
-  string proto_descriptor = 3; // serialized proto descriptor or URL
+  string proto_descriptor = 3;
   string description = 4;
-  repeated string capabilities = 5; // e.g. ["code-review", "deploy", "monitor"]
+  repeated string capabilities = 5;
 }
 
 // --- Requests & Responses ---
@@ -67,7 +74,7 @@ message PingResponse {
   int64 timestamp = 2;
 }
 
-// Register a new user identity.
+// Register a new human user identity (public, unauthenticated).
 message RegisterRequest {
   string name = 1;
   string github = 2;
@@ -79,17 +86,26 @@ message RegisterResponse {
   PublicKey key = 2;
 }
 
-// Create a child identity (agent or org) owned by the caller.
-message CreateIdentityRequest {
-  IdentityKind kind = 1;
-  string name = 2;
-  string description = 3;
-  bytes public_key = 4;     // optional — generate server-side if empty
-  map<string, string> meta = 5;
+// Create an agent user owned by the caller.
+message CreateAgentRequest {
+  string name = 1;
+  string description = 2;
+  bytes public_key = 3;     // optional — for agents that need their own keypair
+  map<string, string> meta = 4;
 }
-message CreateIdentityResponse {
+message CreateAgentResponse {
   Identity identity = 1;
   PublicKey key = 2;
+}
+
+// Create an org owned by the caller.
+message CreateOrgRequest {
+  string name = 1;
+  string description = 2;
+  map<string, string> meta = 3;
+}
+message CreateOrgResponse {
+  Identity identity = 1;
 }
 
 // List identities owned by the caller.
@@ -102,8 +118,8 @@ message ListOwnedResponse {
 
 // Membership management.
 message AddMemberRequest {
-  string group_id = 1;      // org or agent to add member to
-  string member_id = 2;     // identity to add
+  string group_id = 1;
+  string member_id = 2;
   string role = 3;
 }
 message AddMemberResponse {
@@ -170,7 +186,8 @@ service DaoService {
 
   // Authenticated — identity management
   rpc WhoAmI(WhoAmIRequest) returns (WhoAmIResponse) {}
-  rpc CreateIdentity(CreateIdentityRequest) returns (CreateIdentityResponse) {}
+  rpc CreateAgent(CreateAgentRequest) returns (CreateAgentResponse) {}
+  rpc CreateOrg(CreateOrgRequest) returns (CreateOrgResponse) {}
   rpc ListOwned(ListOwnedRequest) returns (ListOwnedResponse) {}
   rpc GetIdentity(GetIdentityRequest) returns (GetIdentityResponse) {}
 

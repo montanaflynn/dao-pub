@@ -55,10 +55,10 @@ func TestPutOverwrites(t *testing.T) {
 
 func TestListByOwnerFiltersCorrectly(t *testing.T) {
 	s := NewMemoryStore()
-	s.Put(makeIdentity("a1", "agent1", "user1", daov1.IdentityKind_IDENTITY_KIND_AGENT))
-	s.Put(makeIdentity("a2", "agent2", "user1", daov1.IdentityKind_IDENTITY_KIND_AGENT))
+	s.Put(makeIdentity("a1", "agent1", "user1", daov1.IdentityKind_IDENTITY_KIND_USER))
+	s.Put(makeIdentity("a2", "agent2", "user1", daov1.IdentityKind_IDENTITY_KIND_USER))
 	s.Put(makeIdentity("o1", "org1", "user1", daov1.IdentityKind_IDENTITY_KIND_ORG))
-	s.Put(makeIdentity("a3", "agent3", "user2", daov1.IdentityKind_IDENTITY_KIND_AGENT))
+	s.Put(makeIdentity("a3", "agent3", "user2", daov1.IdentityKind_IDENTITY_KIND_USER))
 
 	// All owned by user1
 	all := s.ListByOwner("user1", daov1.IdentityKind_IDENTITY_KIND_UNSPECIFIED)
@@ -67,7 +67,7 @@ func TestListByOwnerFiltersCorrectly(t *testing.T) {
 	}
 
 	// Only agents owned by user1
-	agents := s.ListByOwner("user1", daov1.IdentityKind_IDENTITY_KIND_AGENT)
+	agents := s.ListByOwner("user1", daov1.IdentityKind_IDENTITY_KIND_USER)
 	if len(agents) != 2 {
 		t.Fatalf("expected 2 agents owned by user1, got %d", len(agents))
 	}
@@ -81,7 +81,7 @@ func TestListByOwnerFiltersCorrectly(t *testing.T) {
 
 func TestListByOwnerReturnsEmptyForUnknownOwner(t *testing.T) {
 	s := NewMemoryStore()
-	s.Put(makeIdentity("a1", "agent1", "user1", daov1.IdentityKind_IDENTITY_KIND_AGENT))
+	s.Put(makeIdentity("a1", "agent1", "user1", daov1.IdentityKind_IDENTITY_KIND_USER))
 
 	result := s.ListByOwner("nobody", daov1.IdentityKind_IDENTITY_KIND_UNSPECIFIED)
 	if len(result) != 0 {

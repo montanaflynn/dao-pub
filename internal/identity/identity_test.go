@@ -7,10 +7,10 @@ import (
 	daov1 "dao.pub/gen/dao/v1"
 )
 
-// --- NewUser ---
+// --- NewHuman ---
 
-func TestNewUserFields(t *testing.T) {
-	u, err := NewUser("alice", "alice-gh")
+func TestNewHumanFields(t *testing.T) {
+	u, err := NewHuman("alice", "alice-gh")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,28 +23,30 @@ func TestNewUserFields(t *testing.T) {
 	if u.Kind != daov1.IdentityKind_IDENTITY_KIND_USER {
 		t.Fatalf("expected user kind, got %v", u.Kind)
 	}
+	if u.UserType != daov1.UserType_USER_TYPE_HUMAN {
+		t.Fatalf("expected human user type, got %v", u.UserType)
+	}
 	if u.OwnerId != "" {
-		t.Fatalf("user should have no owner, got %s", u.OwnerId)
+		t.Fatalf("human should have no owner, got %s", u.OwnerId)
 	}
 	if u.CreatedAt == 0 {
 		t.Fatal("expected non-zero CreatedAt")
 	}
 }
 
-func TestNewUserGeneratesUniqueIDs(t *testing.T) {
-	u1, _ := NewUser("alice", "gh")
-	u2, _ := NewUser("alice", "gh")
+func TestNewHumanGeneratesUniqueIDs(t *testing.T) {
+	u1, _ := NewHuman("alice", "gh")
+	u2, _ := NewHuman("alice", "gh")
 	if u1.Id == u2.Id {
 		t.Fatalf("expected unique IDs, both got %s", u1.Id)
 	}
 }
 
-func TestNewUserIDFormat(t *testing.T) {
-	u, _ := NewUser("alice", "gh")
+func TestNewHumanIDFormat(t *testing.T) {
+	u, _ := NewHuman("alice", "gh")
 	if !strings.HasPrefix(u.Id, "id_") {
 		t.Fatalf("expected id_ prefix, got %s", u.Id)
 	}
-	// 16 random bytes = 32 hex chars + "id_" prefix = 35 chars
 	if len(u.Id) != 35 {
 		t.Fatalf("expected 35 char ID, got %d: %s", len(u.Id), u.Id)
 	}
@@ -52,13 +54,16 @@ func TestNewUserIDFormat(t *testing.T) {
 
 // --- NewAgent ---
 
-func TestNewAgentRequiresOwner(t *testing.T) {
+func TestNewAgentFields(t *testing.T) {
 	a, err := NewAgent("bot", "owner-123")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a.Kind != daov1.IdentityKind_IDENTITY_KIND_AGENT {
-		t.Fatalf("expected agent kind, got %v", a.Kind)
+	if a.Kind != daov1.IdentityKind_IDENTITY_KIND_USER {
+		t.Fatalf("expected user kind, got %v", a.Kind)
+	}
+	if a.UserType != daov1.UserType_USER_TYPE_AGENT {
+		t.Fatalf("expected agent user type, got %v", a.UserType)
 	}
 	if a.OwnerId != "owner-123" {
 		t.Fatalf("expected owner-123, got %s", a.OwnerId)
@@ -83,13 +88,16 @@ func TestNewAgentWithOptions(t *testing.T) {
 
 // --- NewOrg ---
 
-func TestNewOrgRequiresOwner(t *testing.T) {
+func TestNewOrgFields(t *testing.T) {
 	o, err := NewOrg("acme", "owner-456")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if o.Kind != daov1.IdentityKind_IDENTITY_KIND_ORG {
 		t.Fatalf("expected org kind, got %v", o.Kind)
+	}
+	if o.UserType != daov1.UserType_USER_TYPE_UNSPECIFIED {
+		t.Fatalf("orgs should have unspecified user type, got %v", o.UserType)
 	}
 	if o.OwnerId != "owner-456" {
 		t.Fatalf("expected owner-456, got %s", o.OwnerId)
