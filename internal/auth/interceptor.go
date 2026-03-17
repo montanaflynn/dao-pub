@@ -12,6 +12,11 @@ import (
 
 type contextKey struct{}
 
+// Verifier resolves a signature to an identity ID.
+type Verifier interface {
+	Verify(message, signature []byte) (identityID string, err error)
+}
+
 // IdentityFromContext returns the authenticated identity ID from the context.
 func IdentityFromContext(ctx context.Context) (string, bool) {
 	id, ok := ctx.Value(contextKey{}).(string)
@@ -24,12 +29,8 @@ var publicProcedures = map[string]bool{
 	"/dao.v1.DaoService/Register": true,
 }
 
-// Auth scheme:
-//   X-Dao-Timestamp: unix timestamp (must be within 30s)
-//   X-Dao-Signature: hex-encoded Ed25519 signature of "<timestamp>:<procedure>"
-
 // NewInterceptor returns a Connect interceptor that validates Ed25519 signatures.
-func NewInterceptor(keys *KeyRegistry) connect.UnaryInterceptorFunc {
+func NewInterceptor(v Verifier) connect.UnaryInterceptorFunc {
 	return func(next connect.UnaryFunc) connect.UnaryFunc {
 		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
 			if publicProcedures[req.Spec().Procedure] {
@@ -60,8 +61,8 @@ func NewInterceptor(keys *KeyRegistry) connect.UnaryInterceptorFunc {
 				return nil, connect.NewError(connect.CodeUnauthenticated, fmt.Errorf("invalid signature encoding"))
 			}
 
-			message := []byte(fmt.Sprintf("%s:%s", tsHeader, req.Spec().Procedure))
-			identityID, err := keys.Verify(message, sig)
+			message := FormatSignMessage(tsHeader, req.Spec().Procedure)
+			identityID, err := v.Verify(message, sig)
 			if err != nil {
 				return nil, connect.NewError(connect.CodeUnauthenticated, err)
 			}

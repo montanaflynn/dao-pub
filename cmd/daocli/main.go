@@ -11,8 +11,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
-	"time"
 
 	daov1 "dao.pub/gen/dao/v1"
 	"dao.pub/gen/dao/v1/daov1connect"
@@ -365,10 +363,6 @@ func signReq[T any](req *connect.Request[T], procedure string) {
 	if err != nil {
 		log.Fatal("corrupt identity file")
 	}
-	priv := ed25519.PrivateKey(privBytes)
-	ts := strconv.FormatInt(time.Now().Unix(), 10)
-	message := auth.FormatSignMessage(ts, procedure)
-	sig := ed25519.Sign(priv, message)
-	req.Header().Set("X-Dao-Timestamp", ts)
-	req.Header().Set("X-Dao-Signature", hex.EncodeToString(sig))
+	signer := auth.NewSigner(ed25519.PrivateKey(privBytes))
+	signer.Sign(req, procedure)
 }

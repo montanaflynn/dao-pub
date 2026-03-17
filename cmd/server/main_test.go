@@ -24,6 +24,7 @@ type testEnv struct {
 	client  daov1connect.DaoServiceClient
 	pubKey  ed25519.PublicKey
 	privKey ed25519.PrivateKey
+	signer  *auth.Signer
 }
 
 func newTestEnv(t *testing.T) *testEnv {
@@ -47,15 +48,11 @@ func newTestEnv(t *testing.T) *testEnv {
 	}
 
 	client := daov1connect.NewDaoServiceClient(http.DefaultClient, ts.URL)
-	return &testEnv{client: client, pubKey: pub, privKey: priv}
+	return &testEnv{client: client, pubKey: pub, privKey: priv, signer: auth.NewSigner(priv)}
 }
 
 func (e *testEnv) sign(req interface{ Header() http.Header }, procedure string) {
-	ts := strconv.FormatInt(time.Now().Unix(), 10)
-	msg := auth.FormatSignMessage(ts, procedure)
-	sig := ed25519.Sign(e.privKey, msg)
-	req.Header().Set("X-Dao-Timestamp", ts)
-	req.Header().Set("X-Dao-Signature", hex.EncodeToString(sig))
+	e.signer.Sign(req, procedure)
 }
 
 func (e *testEnv) register(t *testing.T, name, github string) *daov1.RegisterResponse {
@@ -347,13 +344,7 @@ func TestPermissionDenied(t *testing.T) {
 
 	// User 1 registers and creates an org.
 	pub1, priv1, _ := ed25519.GenerateKey(rand.Reader)
-	sign1 := func(req interface{ Header() http.Header }, proc string) {
-		tsStr := strconv.FormatInt(time.Now().Unix(), 10)
-		msg := auth.FormatSignMessage(tsStr, proc)
-		sig := ed25519.Sign(priv1, msg)
-		req.Header().Set("X-Dao-Timestamp", tsStr)
-		req.Header().Set("X-Dao-Signature", hex.EncodeToString(sig))
-	}
+	signer1 := auth.NewSigner(priv1)
 
 	regRes, err := client.Register(ctx, connect.NewRequest(&daov1.RegisterRequest{
 		Name: "user1", Github: "user1", PublicKey: pub1, KeyLabel: "default",
@@ -366,7 +357,7 @@ func TestPermissionDenied(t *testing.T) {
 		Kind: daov1.IdentityKind_IDENTITY_KIND_ORG,
 		Name: "private-org",
 	})
-	sign1(orgReq, "/dao.v1.DaoService/CreateIdentity")
+	signer1.Sign(orgReq, "/dao.v1.DaoService/CreateIdentity")
 	orgRes, err := client.CreateIdentity(ctx, orgReq)
 	if err != nil {
 		t.Fatal(err)
@@ -375,13 +366,7 @@ func TestPermissionDenied(t *testing.T) {
 
 	// User 2 registers.
 	pub2, priv2, _ := ed25519.GenerateKey(rand.Reader)
-	sign2 := func(req interface{ Header() http.Header }, proc string) {
-		tsStr := strconv.FormatInt(time.Now().Unix(), 10)
-		msg := auth.FormatSignMessage(tsStr, proc)
-		sig := ed25519.Sign(priv2, msg)
-		req.Header().Set("X-Dao-Timestamp", tsStr)
-		req.Header().Set("X-Dao-Signature", hex.EncodeToString(sig))
-	}
+	signer2 := auth.NewSigner(priv2)
 
 	_, err = client.Register(ctx, connect.NewRequest(&daov1.RegisterRequest{
 		Name: "user2", Github: "user2", PublicKey: pub2, KeyLabel: "default",
@@ -396,7 +381,7 @@ func TestPermissionDenied(t *testing.T) {
 		MemberId: regRes.Msg.Identity.Id,
 		Role:     "admin",
 	})
-	sign2(addReq, "/dao.v1.DaoService/AddMember")
+	signer2.Sign(addReq, "/dao.v1.DaoService/AddMember")
 	_, err = client.AddMember(ctx, addReq)
 	if err == nil {
 		t.Fatal("expected permission denied")
@@ -575,17 +560,9 @@ func TestAgentOwnsAgent(t *testing.T) {
 	client := daov1connect.NewDaoServiceClient(http.DefaultClient, ts.URL)
 	ctx := context.Background()
 
-	// Helper to sign with a given private key.
-	signWith := func(priv ed25519.PrivateKey, req interface{ Header() http.Header }, proc string) {
-		tsStr := strconv.FormatInt(time.Now().Unix(), 10)
-		msg := auth.FormatSignMessage(tsStr, proc)
-		sig := ed25519.Sign(priv, msg)
-		req.Header().Set("X-Dao-Timestamp", tsStr)
-		req.Header().Set("X-Dao-Signature", hex.EncodeToString(sig))
-	}
-
 	// Register a user.
 	userPub, userPriv, _ := ed25519.GenerateKey(rand.Reader)
+	userSigner := auth.NewSigner(userPriv)
 	_, err := client.Register(ctx, connect.NewRequest(&daov1.RegisterRequest{
 		Name: "human", Github: "human", PublicKey: userPub, KeyLabel: "default",
 	}))
@@ -595,12 +572,13 @@ func TestAgentOwnsAgent(t *testing.T) {
 
 	// User creates an agent with its own keypair.
 	agentPub, agentPriv, _ := ed25519.GenerateKey(rand.Reader)
+	agentSigner := auth.NewSigner(agentPriv)
 	createReq := connect.NewRequest(&daov1.CreateIdentityRequest{
 		Kind:      daov1.IdentityKind_IDENTITY_KIND_AGENT,
 		Name:      "orchestrator",
 		PublicKey: agentPub,
 	})
-	signWith(userPriv, createReq, "/dao.v1.DaoService/CreateIdentity")
+	userSigner.Sign(createReq, "/dao.v1.DaoService/CreateIdentity")
 	agentRes, err := client.CreateIdentity(ctx, createReq)
 	if err != nil {
 		t.Fatal(err)
@@ -613,7 +591,7 @@ func TestAgentOwnsAgent(t *testing.T) {
 		Name:        "sub-worker",
 		Description: "spawned by orchestrator",
 	})
-	signWith(agentPriv, subAgentReq, "/dao.v1.DaoService/CreateIdentity")
+	agentSigner.Sign(subAgentReq, "/dao.v1.DaoService/CreateIdentity")
 	subRes, err := client.CreateIdentity(ctx, subAgentReq)
 	if err != nil {
 		t.Fatal(err)
